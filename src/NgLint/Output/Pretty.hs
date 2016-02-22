@@ -2,6 +2,7 @@ module NgLint.Output.Pretty where
 
 import Data.List
 import NgLint.Messages
+import NgLint.Common
 import NgLint.Output.Common
 import System.Console.ANSI
 import Text.Parsec.Pos

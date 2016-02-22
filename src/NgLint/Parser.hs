@@ -1,12 +1,17 @@
-module NgLint.Parser where
+{-# LANGUAGE GADTs, StandaloneDeriving, FlexibleInstances #-}
 
+module NgLint.Parser where
+import Control.Monad.Writer
+import Data.List
 import Control.Applicative (liftA)
 import Data.Maybe
 import NgLint.Position
+import NgLint.Common
 import Text.Parsec
 import Text.Parsec.Language
 import Text.Parsec.String
 import qualified Text.Parsec.Token as P
+
 
 data RegexOp = CaseSensitiveRegexMatch
               | CaseInsensitiveRegexMatch
@@ -34,22 +39,57 @@ data Condition =
     | FileOperation FileOp Literal
     deriving (Show, Eq)
 
-data Decl =
-    Comment SourcePos String
-    | Block SourcePos String [String] [Decl]
-    | Directive SourcePos String [String]
-    | IfDecl SourcePos Condition [Decl]
-    deriving (Show)
+type LintState = Writer [LintMessage] ()
 
-data Config = Config [Decl] deriving (Show)
+class (Position a) => Decl a where
+  lint :: a -> LintState
+  lint a = return ()
 
-instance Position Decl where
+  isRootDirective :: a -> Bool
+  isRootDirective a = False
+
+data ASTNode where
+  ASTNode :: (Show a, Decl a) => a -> ASTNode
+deriving instance Show ASTNode
+instance Decl ASTNode where
+  lint (ASTNode a) = lint a
+  isRootDirective (ASTNode a) = isRootDirective a
+
+instance Position ASTNode where
+  getPos (ASTNode a) = getPos a
+
+data Config = Config [ASTNode] deriving (Show)
+
+data Comment = Comment SourcePos String deriving (Show)
+
+instance Position Comment where
     getPos (Comment pos _) = pos
-    getPos (Block pos _ _ _) = pos
-    getPos (Directive pos _ _) = pos
-    getPos (IfDecl pos _ _) = pos
 
-parseConfig = parse configFile
+instance Decl Comment
+
+data Block = Block SourcePos String [String] [ASTNode] deriving (Show)
+
+instance Position Block where
+    getPos (Block pos _ _ _) = pos
+
+instance Decl Block where
+  lint (Block pos name _ children) = do
+    when (name == "location") $
+      case find isRootDirective children of
+        Just child -> tell [LintMessage (getPos child) NG001]
+        Nothing -> return ()
+    mapM_ lint children
+
+data Directive = Directive SourcePos String [String] deriving (Show)
+instance Position Directive where
+    getPos (Directive pos _ _) = pos
+instance Decl Directive where
+  isRootDirective (Directive _ name _) = name == "root"
+
+data IfDecl = IfDecl SourcePos Condition [ASTNode] deriving (Show)
+instance Position IfDecl where
+    getPos (IfDecl pos _ _) = pos
+instance Decl IfDecl
 
 configFile :: Parser Config
 configFile = do
@@ -71,7 +111,7 @@ parens      = P.parens lexer
 braces      = P.braces lexer
 identifier  = P.identifier lexer
 
-decl :: Parser Decl
+decl :: Parser ASTNode
 decl = choice $ map try [comment, ifDecl, directive, block]
 
 arg = many1 (alphaNum <|> oneOf "\"*_-+/.'$[]~\\:^()|=?!")
@@ -85,7 +125,7 @@ sepBy1Try p sep = do
 
 sepByTry p sep = sepBy1Try p sep <|> return []
 
-block :: Parser Decl
+block :: Parser ASTNode
 block = do
     pos <- getPosition
     name <- identifier
@@ -94,15 +134,15 @@ block = do
     spaces
     decls <- braces (decl `sepEndBy` spaces)
     spaces
-    return $ Block pos name args decls
+    return $ ASTNode $ Block pos name args decls
     <?> "block"
 
-comment :: Parser Decl
+comment :: Parser ASTNode
 comment = do
     pos <- getPosition
     char '#'
     msg <- manyTill anyChar endOfLine
-    return $ Comment pos msg
+    return $ ASTNode $ Comment pos msg
     <?> "comment"
 
 
@@ -184,7 +224,7 @@ condition :: Parser Condition
 condition = choice $ map try [condCompare, regexMatch, condVariable, fileOperation]
 
 
-ifDecl :: Parser Decl
+ifDecl :: Parser ASTNode
 ifDecl = do
     pos <- getPosition
     string "if" <?> "if"
@@ -193,14 +233,14 @@ ifDecl = do
     spaces
     decls <- braces (decl `sepEndBy` spaces)
     spaces
-    return $ IfDecl pos cond decls
+    return $ ASTNode $ IfDecl pos cond decls
 
-directive :: Parser Decl
+directive :: Parser ASTNode
 directive = do
     pos <- getPosition
     name <- identifier
     spaces
     args <- arg `sepEndBy` spaces
     char ';'
-    return $ Directive pos name args
+    return $ ASTNode $ Directive pos name args
     <?> "directive"

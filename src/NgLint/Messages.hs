@@ -4,10 +4,7 @@ import Control.Arrow ((>>>))
 import NgLint.Parser
 import NgLint.Position
 import Text.Parsec.Pos (SourcePos)
-
-data ErrorCode = NG001 | NG002 | NG003 | NG004 | NG005 deriving (Eq)
-
-data LintMessage = LintMessage SourcePos ErrorCode deriving (Eq)
+import NgLint.Common
 
 instance Show LintMessage where
     show (LintMessage pos code) = show pos ++ ": " ++ show code
@@ -25,6 +22,6 @@ instance Show ErrorCode where
     show NG004 = "NG004: enabling server_tokens leaks your web server version number"
     show NG005 = "NG005: enabling TLSv1 leaves you vulnerable to CRIME attack"
 
-label :: ErrorCode -> [Decl] -> [LintMessage]
+label :: ErrorCode -> [ASTNode] -> [LintMessage]
 label code = map buildMessage
-    where buildMessage decl = LintMessage (getPos decl) code
+    where buildMessage node = LintMessage (getPos node) code
